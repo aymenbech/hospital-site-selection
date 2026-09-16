@@ -40,6 +40,7 @@ export interface CreateProjectInput {
 }
 
 export interface CriterionPayload {
+  id?: string
   code: string
   name: string
   type: 'benefit' | 'cost'
@@ -164,13 +165,23 @@ export const api = {
     return response.json()
   },
 
-  async saveCriteria(projectId: string, processedDatasetId: string, criteria: CriterionPayload[]): Promise<void> {
+  async saveCriteria(projectId: string, processedDatasetId: string, criteria: CriterionPayload[]): Promise<CriterionPayload[]> {
     const response = await fetch(`${API_BASE_URL}/analysis/criteria`, {
       method: 'POST',
       headers: await getJsonHeaders(),
       body: JSON.stringify({ project_id: projectId, processed_dataset_id: processedDatasetId, criteria }),
     })
     await ensureSuccess(response)
+    return response.json()
+  },
+
+  async getActiveCriteria(projectId: string): Promise<CriterionPayload[]> {
+    const response = await fetch(`${API_BASE_URL}/analysis/criteria/${projectId}`, {
+      method: 'GET',
+      headers: await getJsonHeaders(),
+    })
+    await ensureSuccess(response)
+    return response.json()
   },
 
   async runEligibility(projectId: string, processedDatasetId: string): Promise<EligibilityResult> {
