@@ -6,6 +6,7 @@ from app.database import get_db
 from app.models.dataset import (
     AHPCriteriaWeight, AHPComparisonRun, AHPPairwiseComparison, AnalysisRun,
     Criterion, ProcessedDataset, RawDataset, ZoneCriterionScore, ZoneScore,
+    ExcludedZone,
 )
 from app.models.project import Project
 from app.schemas.wam import WAMAnalysisRequest, WAMAnalysisResponse, WAMExpertScore, WAMRankingResult
@@ -81,6 +82,18 @@ def execute_wam(payload: WAMAnalysisRequest, db: Session = Depends(get_db)):
         raw_dataset = db.query(RawDataset).filter(RawDataset.id == processed.raw_dataset_id).first()
         if not raw_dataset or raw_dataset.project_id != project.id:
             raise HTTPException(status_code=400, detail="Processed dataset does not belong to this project")
+
+        eligibility_run = db.query(AnalysisRun).filter(
+            AnalysisRun.id == payload.eligibility_run_id,
+            AnalysisRun.project_id == project.id,
+            AnalysisRun.processed_dataset_id == processed.id,
+        ).first()
+        if not eligibility_run:
+            raise HTTPException(status_code=400, detail="A valid eligibility analysis run is required before WAM.")
+
+        excluded = db.query(ExcludedZone).filter(ExcludedZone.analysis_run_id == eligibility_run.id).all()
+        excluded_ids = {str(row.zone_id) for row in excluded}
+
         criteria = db.query(Criterion).filter(Criterion.project_id == project.id, Criterion.is_active == True).all()
         if len(criteria) != 7:
             raise HTTPException(status_code=400, detail=f"The final methodology requires exactly 7 active criteria; found {len(criteria)}.")
@@ -95,18 +108,21 @@ def execute_wam(payload: WAMAnalysisRequest, db: Session = Depends(get_db)):
             zone_id = get_zone_value(zone, "ID_ZONE") or get_zone_value(zone, "id") or get_zone_value(zone, "zone_id") or get_zone_value(zone, "zone")
             if zone_id is None or str(zone_id).strip() == "":
                 continue
+            zone_id = str(zone_id)
+            if zone_id in excluded_ids:
+                continue
             zone_name = get_zone_value(zone, "ZONE_NAME") or get_zone_value(zone, "zone_name") or get_zone_value(zone, "name")
             values = {}
             for criterion in criteria:
                 value = as_float(get_zone_value(zone, criterion.source_column), f"{criterion.code} in zone {zone_id}")
                 values[criterion.id] = value
                 raw_values[criterion.id].append(value)
-            zone_rows.append((str(zone_id), zone_name, values))
+            zone_rows.append((zone_id, zone_name, values))
         if not zone_rows:
-            raise HTTPException(status_code=400, detail="No valid zones found in processed dataset")
+            raise HTTPException(status_code=400, detail="Eligibility filtering excluded all zones; WAM cannot be executed.")
         zone_ids = [z[0] for z in zone_rows]
         if len(zone_ids) != len(set(zone_ids)):
-            raise HTTPException(status_code=400, detail="Processed dataset contains duplicate zone IDs")
+            raise HTTPException(status_code=400, detail="Eligible dataset contains duplicate zone IDs")
 
         stats = {cid: (min(values), max(values)) for cid, values in raw_values.items()}
         normalized_rows = []
@@ -166,10 +182,10 @@ def execute_wam(payload: WAMAnalysisRequest, db: Session = Depends(get_db)):
 
         analysis_run = AnalysisRun(
             project_id=project.id, processed_dataset_id=processed.id, name="WAM — Equal Expert Average",
-            description="Final methodology: independent AHP criterion weights per expert, WAM score per zone and arithmetic mean across experts. Experts have equal weight; expertise weights are not used.",
-            total_zones=len(zone_rows), eligible_zones=len(zone_rows), excluded_zones_count=0,
+            description="Final methodology: eligibility filtering, independent AHP criterion weights per expert, WAM score per eligible zone and arithmetic mean across experts. Experts have equal weight; expertise weights are not used.",
+            total_zones=len(processed.data), eligible_zones=len(zone_rows), excluded_zones_count=len(excluded_ids),
             criteria_snapshot=[{"id": str(c.id), "code": c.code, "name": c.name, "type": c.type, "source_column": c.source_column} for c in criteria],
-            rules_snapshot=[],
+            rules_snapshot=eligibility_run.rules_snapshot or [],
         )
         db.add(analysis_run)
         db.flush()
