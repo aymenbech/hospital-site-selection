@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models.dataset import Criterion, ProcessedDataset, RawDataset
+from app.models.dataset import AHPComparisonRun, AHPCriteriaWeight, Criterion, ProcessedDataset, RawDataset
 from app.models.project import Project
 from app.schemas.wam import WAMAnalysisRequest, WAMAnalysisResponse, WAMExpertScore, WAMRankingResult
 
@@ -76,8 +76,6 @@ def execute_wam(payload: WAMAnalysisRequest, db: Session = Depends(get_db)):
     if not zone_rows:
         raise HTTPException(status_code=400, detail="No valid zones found in processed dataset")
 
-    # Min-max normalization creates the common decision matrix R.
-    # Benefit: (x-min)/(max-min); Cost: 1-(x-min)/(max-min).
     stats = {cid: (min(values), max(values)) for cid, values in raw_values.items()}
     normalized_rows = []
     for zone_id, zone_name, values in zone_rows:
@@ -96,17 +94,28 @@ def execute_wam(payload: WAMAnalysisRequest, db: Session = Depends(get_db)):
     for expert in payload.experts:
         if expert.consistency_ratio > 0.10:
             raise HTTPException(status_code=400, detail=f"Expert '{expert.expert_name}' has CR={expert.consistency_ratio:.4f}; CR must be <= 0.10.")
-        if len(expert.criteria_weights) != 7:
-            raise HTTPException(status_code=400, detail=f"Expert '{expert.expert_name}' must provide weights for exactly 7 criteria.")
 
-        weights = {item.criterion_id: float(item.weight) for item in expert.criteria_weights}
+        comparison_run = db.query(AHPComparisonRun).filter(
+            AHPComparisonRun.id == expert.comparison_run_id,
+            AHPComparisonRun.project_id == payload.project_id,
+        ).first()
+        if not comparison_run:
+            raise HTTPException(status_code=400, detail=f"AHP comparison run for expert '{expert.expert_name}' was not found for this project.")
+
+        persisted_weights = db.query(AHPCriteriaWeight).filter(
+            AHPCriteriaWeight.comparison_run_id == comparison_run.id,
+        ).all()
+        if len(persisted_weights) != 7:
+            raise HTTPException(status_code=400, detail=f"AHP run for expert '{expert.expert_name}' must contain exactly 7 criterion weights.")
+
+        weights = {item.criterion_id: float(item.weight) for item in persisted_weights}
         if set(weights) != criterion_ids:
-            raise HTTPException(status_code=400, detail=f"Expert '{expert.expert_name}' criteria weights do not match the 7 active project criteria.")
+            raise HTTPException(status_code=400, detail=f"AHP run for expert '{expert.expert_name}' does not match the 7 active project criteria.")
         if any(weight < 0 for weight in weights.values()):
-            raise HTTPException(status_code=400, detail=f"Expert '{expert.expert_name}' contains a negative criterion weight.")
+            raise HTTPException(status_code=400, detail=f"AHP run for expert '{expert.expert_name}' contains a negative criterion weight.")
         total_weight = sum(weights.values())
         if total_weight <= 0 or abs(total_weight - 1.0) > 0.001:
-            raise HTTPException(status_code=400, detail=f"Expert '{expert.expert_name}' AHP weights must sum to 1 (found {total_weight:.6f}).")
+            raise HTTPException(status_code=400, detail=f"AHP weights for expert '{expert.expert_name}' must sum to 1 (found {total_weight:.6f}).")
 
         zone_scores = {
             zone_id: sum(weights[criterion.id] * normalized[criterion.id] for criterion in criteria)
@@ -114,7 +123,6 @@ def execute_wam(payload: WAMAnalysisRequest, db: Session = Depends(get_db)):
         }
         expert_results.append(WAMExpertScore(expert_id=expert.expert_id, expert_name=expert.expert_name, zone_scores=zone_scores))
 
-    # Equal expert weighting: arithmetic mean of each expert's WAM score.
     final_scores = {
         zone_id: sum(result.zone_scores[zone_id] for result in expert_results) / len(expert_results)
         for zone_id, _, _ in normalized_rows
