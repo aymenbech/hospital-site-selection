@@ -26,6 +26,7 @@ class WAMRankingResult(BaseModel):
 class WAMExpertScore(BaseModel):
     expert_id: str
     expert_name: str
+    comparison_run_id: UUID
     zone_scores: dict[str, float]
 
 
@@ -36,6 +37,7 @@ class WAMAnalysisRequest(BaseModel):
 
 
 class WAMAnalysisResponse(BaseModel):
+    analysis_run_id: UUID
     project_id: UUID
     processed_dataset_id: UUID
     criteria_count: int
