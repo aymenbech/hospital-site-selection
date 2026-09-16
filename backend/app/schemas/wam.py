@@ -33,6 +33,7 @@ class WAMExpertScore(BaseModel):
 class WAMAnalysisRequest(BaseModel):
     project_id: UUID
     processed_dataset_id: UUID
+    eligibility_run_id: UUID
     experts: list[ExpertWAMInput] = Field(..., min_length=1)
 
 
