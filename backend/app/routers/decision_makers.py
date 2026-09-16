@@ -1,18 +1,11 @@
-from collections import defaultdict
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models.dataset import (
-    DecisionMaker,
-    ExpertComparison,
-    ExpertWeight,
-)
+from app.models.dataset import DecisionMaker, ExpertComparison
 from app.schemas.decision_maker import (
-    AggregatedWeightItem,
-    AggregatedWeightsResponse,
     DecisionMakerCreate,
     DecisionMakerResponse,
     DecisionMakerUpdate,
@@ -21,9 +14,10 @@ from app.schemas.decision_maker import (
 )
 
 
-# IMPORTANT:
-# Do not add prefix="/api/decision-makers" here,
-# because main.py already adds that prefix.
+# Decision makers only manage experts and their legacy comparison records.
+# The final methodology does NOT aggregate expert criterion weights here.
+# Final calculation is performed by /api/wam/execute:
+# AHP per expert -> WAM per expert -> equal expert average.
 router = APIRouter()
 
 
@@ -41,6 +35,8 @@ def create_decision_maker(
         name=payload.name,
         email=payload.email,
         role=payload.role,
+        # Kept for database/schema compatibility only.
+        # It is NOT used by the final methodology.
         expertise_weight=payload.expertise_weight,
     )
 
@@ -130,13 +126,11 @@ def save_expert_comparisons(
     payload: ExpertComparisonCreate,
     db: Session = Depends(get_db),
 ):
-    """
-    Saves all pairwise comparisons submitted by one expert.
+    """Save legacy expert comparison records for compatibility.
 
-    The request body must contain:
-    - decision_maker_id
-    - analysis_run_id
-    - comparisons: [{criterion_i_id, criterion_j_id, comparison_value}, ...]
+    The production AHP workflow uses /api/ahp/runs and persisted
+    AHPComparisonRun/AHPPairwiseComparison records. This endpoint does not
+    participate in the final WAM ranking calculation.
     """
     decision_maker = (
         db.query(DecisionMaker)
@@ -191,104 +185,3 @@ def save_expert_comparisons(
     except Exception:
         db.rollback()
         raise
-
-
-@router.get(
-    "/aggregate-weights/{analysis_run_id}",
-    response_model=AggregatedWeightsResponse,
-)
-def aggregate_expert_weights(
-    analysis_run_id: UUID,
-    method: str = "wam",
-    db: Session = Depends(get_db),
-):
-    """
-    WAM formula for each criterion:
-
-    group_weight =
-      Σ(individual_AHP_weight × expert_expertise_weight)
-      -------------------------------------------------
-                  Σ(expert_expertise_weight)
-
-    Then all calculated group weights are normalized so
-    their sum equals 1.0.
-    """
-    if method.lower() != "wam":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only method='wam' is supported for group AHP aggregation.",
-        )
-
-    rows = (
-        db.query(
-            ExpertWeight.criterion_id,
-            ExpertWeight.weight,
-            DecisionMaker.expertise_weight,
-        )
-        .join(
-            DecisionMaker,
-            DecisionMaker.id == ExpertWeight.decision_maker_id,
-        )
-        .filter(
-            ExpertWeight.ahp_run_id == analysis_run_id,
-        )
-        .all()
-    )
-
-    if not rows:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=(
-                "No expert AHP weights were found for this analysis run. "
-                "Each decision maker must complete and save AHP first."
-            ),
-        )
-
-    criterion_values: dict[UUID, list[tuple[float, float]]] = defaultdict(list)
-
-    for criterion_id, individual_weight, expertise_weight in rows:
-        criterion_values[criterion_id].append(
-            (
-                float(individual_weight),
-                float(expertise_weight),
-            )
-        )
-
-    raw_group_weights: dict[UUID, float] = {}
-
-    for criterion_id, values in criterion_values.items():
-        numerator = sum(
-            individual_weight * expert_weight
-            for individual_weight, expert_weight in values
-        )
-
-        denominator = sum(
-            expert_weight
-            for _, expert_weight in values
-        )
-
-        raw_group_weights[criterion_id] = (
-            numerator / denominator if denominator > 0 else 0.0
-        )
-
-    total_weight = sum(raw_group_weights.values())
-
-    if total_weight <= 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="The aggregated group weight total is zero.",
-        )
-
-    aggregated_weights = [
-        AggregatedWeightItem(
-            criterion_id=criterion_id,
-            weight=weight / total_weight,
-        )
-        for criterion_id, weight in raw_group_weights.items()
-    ]
-
-    return AggregatedWeightsResponse(
-        analysis_run_id=analysis_run_id,
-        aggregation_method="wam",
-        weights=aggregated_weights,
-    )
