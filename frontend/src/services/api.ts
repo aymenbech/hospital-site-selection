@@ -120,7 +120,7 @@ export const api = {
   },
 
   async processDataset(datasetId: string): Promise<ProcessedDataset> {
-    const response = await fetch(`${API_BASE_URL}/datasets-profiling/${datasetId}/process`, {
+    const response = await fetch(`${API_BASE_URL}/datasets/${datasetId}/process`, {
       method: 'POST',
       headers: await getJsonHeaders(),
     })
