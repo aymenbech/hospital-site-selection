@@ -1,15 +1,21 @@
 # 🏥 MC-DSS: Hospital Site Selection
 
-Multi-Criteria Decision Support System for Hospital Site Selection using AHP-SAW-WAM
+Multi-Criteria Decision Support System for Hospital Site Selection using:
 
-## 🎯 Features
+**Eligibility Filtering → AHP (per expert) → WAM (per expert) → Arithmetic Average → Final Ranking**
 
-- ✅ Multi-expert support with different expertise weights
-- ✅ AHP pairwise comparisons with consistency check (CR)
-- ✅ WAM aggregation using Weighted Arithmetic Mean
-- ✅ SAW ranking with normalized scores
-- ✅ CSV upload and data processing
-- ✅ Export results to CSV
+## 🎯 Final methodology
+
+- Exactly **7 active criteria** are used by the AHP model.
+- Each expert performs **21 unique pairwise comparisons** (7×6/2).
+- AHP automatically generates reciprocal matrix values and computes criterion weights.
+- Consistency is checked with **λmax, CI, RI = 1.32 and CR = CI/RI**.
+- Only expert assessments with **CR ≤ 0.10** are accepted for WAM.
+- Eligibility filtering is executed before WAM; excluded zones are not scored.
+- WAM is computed independently for each expert using that expert's persisted AHP weights.
+- Expert results are combined using a **simple arithmetic mean**. No expertise weights are used.
+- Final ranking is ordered by descending final WAM score.
+- Results can be exported to CSV.
 
 ## 🛠 Tech Stack
 
@@ -17,7 +23,7 @@ Multi-Criteria Decision Support System for Hospital Site Selection using AHP-SAW
 - FastAPI
 - SQLAlchemy
 - PostgreSQL (Supabase)
-- Pandas
+- Pandas / NumPy
 
 ### Frontend
 - React 18
