@@ -59,16 +59,19 @@ export default function CriteriaSelection() {
     setSaving(true)
     setError(null)
     try {
-      await api.saveCriteria(projectId, datasetId, criteria)
-      navigate(`/decision-makers?projectId=${projectId}&datasetId=${datasetId}`)
+      // Convert the raw dataset to the processed dataset used by the analysis API.
+      // The criteria must reference this processed dataset, not the raw upload id.
+      const processed = await api.processDataset(datasetId)
+      await api.saveCriteria(projectId, processed.id, criteria)
+      navigate(`/decision-makers?projectId=${projectId}&datasetId=${datasetId}&processedDatasetId=${processed.id}`)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save criteria.')
+      setError(err instanceof Error ? err.message : 'Failed to prepare dataset or save criteria.')
     } finally {
       setSaving(false)
     }
   }
 
-  if (loading) return <main className="min-h-screen flex items-center justify-center"><p>Loading…</p></main>
+  if (loading) return <main className="min-h-screen flex items-center justify-center bg-slate-50"><p className="text-slate-500">Loading…</p></main>
 
   if (error && !dataset) return <main className="max-w-3xl mx-auto p-8"><Link to={`/projects/${projectId}`}>← Back</Link><p className="mt-6 text-red-600">{error}</p></main>
 
@@ -134,7 +137,7 @@ export default function CriteriaSelection() {
 
         <div className="mt-6 flex flex-col sm:flex-row justify-end gap-3">
           <button onClick={() => navigate(`/projects/${projectId}`)} className="rounded-xl px-5 py-3 bg-white border border-slate-300 text-slate-700">Cancel</button>
-          <button onClick={save} disabled={criteria.length !== 7 || saving} className="rounded-xl px-6 py-3 bg-blue-600 text-white font-semibold hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed">{saving ? 'Saving…' : 'Save & continue to experts'}</button>
+          <button onClick={save} disabled={criteria.length !== 7 || saving} className="rounded-xl px-6 py-3 bg-blue-600 text-white font-semibold hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed">{saving ? 'Preparing dataset…' : 'Save & continue to experts'}</button>
         </div>
       </div>
     </main>
