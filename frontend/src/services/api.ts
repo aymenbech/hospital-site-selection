@@ -46,6 +46,42 @@ export interface CriterionPayload {
   source_column: string
 }
 
+export interface EligibilityResult {
+  analysis_run_id: string
+  project_id: string
+  processed_dataset_id: string
+  total_zones: number
+  eligible_zones: number
+  excluded_zones: number
+}
+
+export interface WAMExpertInput {
+  expert_id: string
+  expert_name: string
+  consistency_ratio: number
+  comparison_run_id: string
+}
+
+export interface WAMResult {
+  analysis_run_id: string
+  project_id: string
+  processed_dataset_id: string
+  criteria_count: number
+  experts_count: number
+  expert_scores: Array<{
+    expert_id: string
+    expert_name: string
+    comparison_run_id: string
+    zone_scores: Record<string, number>
+  }>
+  rankings: Array<{
+    zone_id: string
+    zone_name: string | null
+    final_score: string
+    rank: number
+  }>
+}
+
 async function getAccessToken(): Promise<string> {
   const { data: { session }, error } = await supabase.auth.getSession()
   if (error) throw new Error(`Unable to get authentication session: ${error.message}`)
@@ -135,5 +171,35 @@ export const api = {
       body: JSON.stringify({ project_id: projectId, processed_dataset_id: processedDatasetId, criteria }),
     })
     await ensureSuccess(response)
+  },
+
+  async runEligibility(projectId: string, processedDatasetId: string): Promise<EligibilityResult> {
+    const response = await fetch(`${API_BASE_URL}/analysis/runs/eligibility`, {
+      method: 'POST',
+      headers: await getJsonHeaders(),
+      body: JSON.stringify({
+        project_id: projectId,
+        processed_dataset_id: processedDatasetId,
+        name: 'Eligibility filtering',
+        description: 'Eligibility filtering before AHP/WAM scoring.',
+      }),
+    })
+    await ensureSuccess(response)
+    return response.json()
+  },
+
+  async executeWAM(projectId: string, processedDatasetId: string, eligibilityRunId: string, experts: WAMExpertInput[]): Promise<WAMResult> {
+    const response = await fetch(`${API_BASE_URL}/wam/execute`, {
+      method: 'POST',
+      headers: await getJsonHeaders(),
+      body: JSON.stringify({
+        project_id: projectId,
+        processed_dataset_id: processedDatasetId,
+        eligibility_run_id: eligibilityRunId,
+        experts,
+      }),
+    })
+    await ensureSuccess(response)
+    return response.json()
   },
 }
