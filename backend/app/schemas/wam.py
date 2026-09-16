@@ -13,7 +13,7 @@ class ExpertWAMInput(BaseModel):
     expert_id: str
     expert_name: str
     consistency_ratio: float = Field(..., ge=0.0)
-    criteria_weights: list[ExpertCriterionWeightInput]
+    comparison_run_id: UUID
 
 
 class WAMRankingResult(BaseModel):
