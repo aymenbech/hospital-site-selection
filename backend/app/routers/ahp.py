@@ -71,6 +71,14 @@ def create_ahp_comparison_run(payload: AHPComparisonRunCreate, db: Session = Dep
     cr = ci / ri if ri > 0 else 0.0
     is_consistent = cr <= 0.10
 
+    # An inconsistent AHP judgment must not become a persisted expert run.
+    # This guarantees that only CR <= 0.10 assessments can reach WAM.
+    if not is_consistent:
+        raise HTTPException(
+            status_code=400,
+            detail=f"AHP consistency ratio CR={cr:.4f} exceeds 0.10. Revise the pairwise comparisons before proceeding to WAM."
+        )
+
     comparison_run = AHPComparisonRun(project_id=payload.project_id, analysis_run_id=payload.analysis_run_id, name=payload.name, description=payload.description)
     db.add(comparison_run)
     db.flush()
