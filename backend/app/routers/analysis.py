@@ -109,6 +109,31 @@ def save_criteria(payload: CriteriaSaveRequest, db: Session = Depends(get_db)):
     ]
 
 
+@router.get("/criteria/{project_id}", response_model=list[dict])
+def get_active_criteria(project_id: UUID, db: Session = Depends(get_db)):
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    criteria = db.query(Criterion).filter(
+        Criterion.project_id == project_id,
+        Criterion.is_active == True,
+    ).order_by(Criterion.code.asc()).all()
+    if len(criteria) != 7:
+        raise HTTPException(status_code=400, detail=f"The final methodology requires exactly 7 active criteria; found {len(criteria)}.")
+    return [
+        {
+            "id": str(c.id),
+            "project_id": str(c.project_id),
+            "code": c.code,
+            "name": c.name,
+            "type": c.type,
+            "source_column": c.source_column,
+            "is_active": c.is_active,
+        }
+        for c in criteria
+    ]
+
+
 @router.post(
     "/runs/eligibility",
     response_model=EligibilityAnalysisResponse,
