@@ -25,6 +25,14 @@ export interface RawDataset {
   created_at: string
 }
 
+export interface ProcessedDataset {
+  id: string
+  raw_dataset_id: string
+  name: string
+  row_count: number
+  column_count: number
+}
+
 export interface CreateProjectInput {
   name: string
   description?: string
@@ -107,6 +115,15 @@ export const api = {
 
   async getProjectDatasets(projectId: string): Promise<RawDataset[]> {
     const response = await fetch(`${API_BASE_URL}/projects/${projectId}/datasets`, { method: 'GET', headers: await getJsonHeaders() })
+    await ensureSuccess(response)
+    return response.json()
+  },
+
+  async processDataset(datasetId: string): Promise<ProcessedDataset> {
+    const response = await fetch(`${API_BASE_URL}/datasets-profiling/${datasetId}/process`, {
+      method: 'POST',
+      headers: await getJsonHeaders(),
+    })
     await ensureSuccess(response)
     return response.json()
   },
