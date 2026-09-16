@@ -2,7 +2,16 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models.dataset import AHPComparisonRun, AHPCriteriaWeight, Criterion, ProcessedDataset, RawDataset
+from app.models.dataset import (
+    AHPCriteriaWeight,
+    AHPComparisonRun,
+    AnalysisRun,
+    Criterion,
+    ProcessedDataset,
+    RawDataset,
+    ZoneCriterionScore,
+    ZoneScore,
+)
 from app.models.project import Project
 from app.schemas.wam import WAMAnalysisRequest, WAMAnalysisResponse, WAMExpertScore, WAMRankingResult
 
@@ -91,6 +100,7 @@ def execute_wam(payload: WAMAnalysisRequest, db: Session = Depends(get_db)):
         normalized_rows.append((zone_id, zone_name, normalized))
 
     expert_results = []
+    persistence_payload = []
     for expert in payload.experts:
         if expert.consistency_ratio > 0.10:
             raise HTTPException(status_code=400, detail=f"Expert '{expert.expert_name}' has CR={expert.consistency_ratio:.4f}; CR must be <= 0.10.")
@@ -117,11 +127,26 @@ def execute_wam(payload: WAMAnalysisRequest, db: Session = Depends(get_db)):
         if total_weight <= 0 or abs(total_weight - 1.0) > 0.001:
             raise HTTPException(status_code=400, detail=f"AHP weights for expert '{expert.expert_name}' must sum to 1 (found {total_weight:.6f}).")
 
-        zone_scores = {
-            zone_id: sum(weights[criterion.id] * normalized[criterion.id] for criterion in criteria)
-            for zone_id, _, normalized in normalized_rows
-        }
-        expert_results.append(WAMExpertScore(expert_id=expert.expert_id, expert_name=expert.expert_name, zone_scores=zone_scores))
+        zone_scores = {}
+        zone_details = []
+        for zone_id, zone_name, normalized in normalized_rows:
+            criterion_contributions = {
+                criterion.id: weights[criterion.id] * normalized[criterion.id]
+                for criterion in criteria
+            }
+            score = sum(criterion_contributions.values())
+            zone_scores[zone_id] = score
+            zone_details.append((zone_id, zone_name, normalized, criterion_contributions, score))
+
+        expert_results.append(
+            WAMExpertScore(
+                expert_id=expert.expert_id,
+                expert_name=expert.expert_name,
+                comparison_run_id=expert.comparison_run_id,
+                zone_scores=zone_scores,
+            )
+        )
+        persistence_payload.append((expert, zone_details))
 
     final_scores = {
         zone_id: sum(result.zone_scores[zone_id] for result in expert_results) / len(expert_results)
@@ -129,6 +154,74 @@ def execute_wam(payload: WAMAnalysisRequest, db: Session = Depends(get_db)):
     }
     zone_names = {zone_id: zone_name for zone_id, zone_name, _ in normalized_rows}
     ordered = sorted(final_scores.items(), key=lambda item: item[1], reverse=True)
-    rankings = [WAMRankingResult(zone_id=zone_id, zone_name=zone_names.get(zone_id), final_score=score, rank=index + 1) for index, (zone_id, score) in enumerate(ordered)]
+    rankings = [
+        WAMRankingResult(
+            zone_id=zone_id,
+            zone_name=zone_names.get(zone_id),
+            final_score=score,
+            rank=index + 1,
+        )
+        for index, (zone_id, score) in enumerate(ordered)
+    ]
 
-    return WAMAnalysisResponse(project_id=project.id, processed_dataset_id=processed.id, criteria_count=7, experts_count=len(expert_results), expert_scores=expert_results, rankings=rankings)
+    analysis_run = AnalysisRun(
+        project_id=project.id,
+        processed_dataset_id=processed.id,
+        name="WAM — Equal Expert Average",
+        description=(
+            "Final methodology: independent AHP criterion weights per expert, "
+            "WAM score per zone and arithmetic mean across experts. "
+            "Expertise weights are not used."
+        ),
+        total_zones=len(zone_rows),
+        eligible_zones=len(zone_rows),
+        excluded_zones_count=0,
+        criteria_snapshot=[
+            {
+                "id": str(criterion.id),
+                "code": criterion.code,
+                "name": criterion.name,
+                "type": criterion.type,
+                "source_column": criterion.source_column,
+            }
+            for criterion in criteria
+        ],
+        rules_snapshot=[],
+    )
+    db.add(analysis_run)
+    db.flush()
+
+    for expert, zone_details in persistence_payload:
+        for zone_id, zone_name, normalized, contributions, score in zone_details:
+            zone_score = ZoneScore(
+                analysis_run_id=analysis_run.id,
+                ahp_run_id=expert.comparison_run_id,
+                zone_id=zone_id,
+                zone_name=zone_name,
+                score=score,
+                rank=None,
+            )
+            db.add(zone_score)
+            db.flush()
+            for criterion in criteria:
+                db.add(
+                    ZoneCriterionScore(
+                        zone_score_id=zone_score.id,
+                        criterion_id=criterion.id,
+                        criterion_code=criterion.code,
+                        normalized_value=normalized[criterion.id],
+                        weighted_score=contributions[criterion.id],
+                    )
+                )
+
+    db.commit()
+
+    return WAMAnalysisResponse(
+        analysis_run_id=analysis_run.id,
+        project_id=project.id,
+        processed_dataset_id=processed.id,
+        criteria_count=7,
+        experts_count=len(expert_results),
+        expert_scores=expert_results,
+        rankings=rankings,
+    )
