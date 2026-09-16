@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { api, EligibilityResult, WAMResult } from '../services/api'
-import { supabase } from '../services/supabase'
 
 interface ExpertData {
   expert_id: string
